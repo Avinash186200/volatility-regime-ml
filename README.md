@@ -1,101 +1,109 @@
-# Volatility Regime Forecasting — an ML case study
+# Volatility Regime ML
 
-A write-up of an applied ML project: using engineered volatility features and a model ensemble
-to forecast market volatility regimes, with a strong focus on **rigorous, leak-free validation**.
+Several genuinely different volatility forecasters, one shared leak-free evaluation, and an honest answer to two questions: why do they disagree, and does combining them help?
 
-This is a **case study**, not a code repo — it describes the problem, the modeling approach, and
-(most importantly) the validation process. No proprietary code, data, API keys, or client details
-are included. Figures below are rounded/representative of the real results, not exact production
-numbers.
+This is a research project I designed and mentored. I wrote the brief and the starter code, and set the ground rules: same data, same splits and same loss for every model, nothing tuned on the test set, and "it doesn't beat HAR-RV" counts as a real result. This repo is my own working implementation of that brief. It runs on a **synthetic regime-switching market** by default, and can download free public daily data at runtime. No data is committed.
 
----
+[![CI](../../actions/workflows/ci.yml/badge.svg)](../../actions/workflows/ci.yml)
 
-## The problem
+## At a glance
 
-Short-term volatility is hard to forecast directly — it's noisy, and naive models tend to produce
-backtests that look great until you check them properly. The brief: build a model that estimates
-the probability of a market volatility regime shift, usable as a risk-management signal rather
-than a price predictor.
+| | |
+|---|---|
+| **Input** | Daily `close`, `ret` (log return) and `rv` (realised variance): synthetic, a user CSV, or free OHLC data downloaded at runtime |
+| **Method** | EWMA, GARCH(1,1), HAR-RV, a log-HAR ablation, a regime classifier feeding a regime-conditional HAR, and two ensembles, all through one rolling-origin walk-forward |
+| **Output** | Out-of-sample variance forecasts at 1, 5 and 22 days, QLIKE and MSE against HAR with Diebold-Mariano tests, regime classifier AUC/Brier, and a vol-targeting sanity check |
+| **Leakage controls** | Features use data up to the forecast day only, purge of `h` rows before each test block, thresholds and ensemble weights from past data only, a truncation test and a pure-noise test in CI |
+| **Status** | Research complete on synthetic data. No real-data claims |
 
-## Feature engineering
+## How it works
 
-The breakthrough came from reframing the target. Instead of predicting the volatility index
-directly, the model predicts off the **relationship between implied and realized volatility**:
+```
+data ──► causal features ──► rolling walk-forward (refit every 63 days, purge h) ──► forecasts ──► QLIKE / MSE / DM
+data.py   features.py         walkforward.py + models.py                                          metrics.py
+```
 
-- **IV/RV ratio** — implied vol (market-priced) vs. realized vol (what actually happened).
-  IV > RV → calm regime. IV < RV → stress regime (the market under-priced recent realized moves).
-- Realized volatility at multiple windows (5d / 10d / 21d / 63d), with momentum ratios between them
-- Volatility term-structure features (short-dated vs. longer-dated implied vol)
-- Cross-sectional dispersion (how correlated/uncorrelated the underlying constituents are)
+1. **Data.** The synthetic market has a calm (12% vol) and a stress (35% vol) regime, a leverage effect and rare jumps. Each day is built from 78 intraday returns, so `rv` is a real realised variance. For public data, `rv` is the Garman-Klass range estimator from daily OHLC.
+2. **Features at the close of day t**, using days up to t only: daily, weekly and monthly realised variance (the HAR components), an EWMA, the day's negative return, and their logs.
+3. **Target**: the average realised variance over days t+1 to t+h.
+4. **Forecasters**, all with the same `fit` / `predict` interface:
 
-Reframing the target this way — relative mispricing instead of an absolute level — took the
-strongest feature's information coefficient from **not statistically significant to a 6x
-improvement**, confirmed with a formal significance test (p < 0.001).
+   | Model | What it captures |
+   |---|---|
+   | `hist_mean` | Nothing. The training-window average, as a floor |
+   | `ewma` | Recent realised variance, RiskMetrics lambda 0.94 (fixed, not tuned) |
+   | `garch` | GARCH(1,1) fitted by maximum likelihood on daily returns only |
+   | `har` | HAR-RV (Corsi, 2009): OLS on daily, weekly and monthly RV. The benchmark |
+   | `log_har` | HAR on log variance plus a leverage term. An ablation |
+   | `regime_har` | `log_har` plus the regime classifier's P(high regime) and its interaction with daily RV |
+   | `ens_equal` | Equal-weight average of `ewma`, `garch`, `har`, `regime_har` |
+   | `ens_invloss` | Inverse-QLIKE weights from **earlier folds only** |
 
-## Modeling
+5. **Walk-forward**: a 1,000-day rolling training window, refit every 63 days. Training rows whose target window reaches into the test block are dropped.
 
-An ensemble of diverse architectures, deliberately choosing **architecture and horizon diversity**
-over single-model tuning:
+## Results on synthetic data
 
-- Logistic regression (regime classification) and gradient-boosted trees (HistGradientBoosting,
-  LightGBM) for regression, each trained at multiple forecast horizons
-- Systematic ablation: each candidate model/feature-set was tested **solo** before being added to
-  the ensemble — only kept if it added genuinely uncorrelated signal (tracked via out-of-sample
-  correlation between model outputs, not just raw performance)
-- Dozens of architecture/feature combinations tested and most **rejected** — the ensemble that
-  shipped kept ~4 models out of 10+ tried, specifically the ones that were both performant *and*
-  weakly correlated with the rest
+`python scripts/run_forecasts.py` (seed 7, 3,000 days, 32 folds, about 1,960 out-of-sample forecasts per horizon). QLIKE relative to HAR, so below 1.00 is better than HAR:
 
-## The part that matters most: catching our own mistakes
+| Model | h = 1 | h = 5 | h = 22 |
+|---|---|---|---|
+| Historical mean | 8.75 | 8.35 | 4.06 |
+| EWMA | 1.77 | 1.63 | 1.07 |
+| GARCH(1,1) | 2.05 | 1.92 | 1.27 |
+| **HAR-RV** (QLIKE) | **1.00** (0.061) | **1.00** (0.061) | **1.00** (0.123) |
+| Log-HAR + leverage | 0.80 | 0.70 | 0.71 |
+| Regime HAR | 0.83 | 0.75 | 0.86 |
+| Equal-weight ensemble | 1.17 | 1.09 | 0.90 |
+| Inverse-loss ensemble | 1.04 | 0.97 | 0.88 |
 
-Two real bugs were caught mid-project, both the kind that quietly inflate a backtest:
+The full output, with MSE ratios and Diebold-Mariano statistics, is printed by the script and written to `results/`.
 
-1. **Look-ahead bias.** An early version scored very well — until an audit found ~30 of 41
-   features used same-day closing prices that would not actually have been available at the time
-   the signal needed to fire. Re-running with every feature correctly lagged dropped the headline
-   number substantially. Shipped the honest version anyway.
-2. **Target contamination.** A separate model used a 3-day-forward target that leaked information
-   from inside the window. Switching to a clean 1-day-forward target with a strict expanding
-   walk-forward split produced a realistic, defensible result instead of an inflated one.
+What I take from this:
 
-## Validation methodology
+- **Why GARCH loses**: it only sees daily close-to-close returns, while HAR and EWMA see intraday realised variance. One squared daily return is a very noisy measure of that day's variance, so GARCH is fitting noise. This is the standard finding (Andersen, Bollerslev, Diebold and Labys, 2003), and the gap is about information, not about the model.
+- **The regime model's gain is not about regimes**. It beats HAR, but the log-HAR ablation, which has the same log transform and leverage term and no regime probability, does at least as well at every horizon. Where the classifier is useful is classification: out of sample it separates the high regime with an AUC of 0.98 at h = 1, against 0.92 for simply ranking the current EWMA level. The same probability adds nothing to a variance forecast that already has the log RV terms.
+- **Combining**: the equal-weight average is worse than HAR at short horizons because two of its four members are clearly weaker. Inverse-loss weights from past folds recover most of that, and both ensembles beat HAR at 22 days, but neither beats the best single model. Here, combining did not earn its keep.
+- **Economic check** (h = 1, scaling returns to a 10% vol target): the spread of the 63-day realised vol around the target is 0.51 with the historical mean, 0.12 with HAR and 0.11 with the regime model. Better variance forecasts do give steadier risk, but this ignores costs, leverage limits and the volatility risk premium, so it is a sanity check, not a strategy.
 
-The validation bar, applied to every candidate before it was allowed to ship:
+These numbers come from a generator I wrote, with regimes and leverage planted in it, so they show what the methods **can** recover, not what they will do on a market. With the regimes, leverage and jumps switched off, no model beats the historical mean and the classifier's AUC is about 0.5. That check is a test in CI.
 
-- **Walk-forward, expanding-window** splits only — train strictly on the past, never shuffle time series
-- **Permutation testing** — shuffle the labels, re-run, confirm the real result beats the shuffled
-  distribution (p < 0.05 required)
-- **Bootstrap confidence intervals** on the headline metric, not a single point estimate
-- **Deflated Sharpe / multiple-testing awareness** — when dozens of model variants are tried, the
-  "best" one is expected to look good by chance alone; the bar accounts for how many variants were
-  tested, not just the winner's raw score
-- A hard rule: **a result that can't clear permutation + bootstrap + multiple-testing checks does
-  not ship**, no matter how good the headline number looks
+> **About real data.** `--ticker` downloads free daily OHLC at runtime and runs exactly the same pipeline. I don't publish real-data numbers here. With daily data only, `rv` is a range estimator and misses the overnight gap, so the GARCH and HAR comparison changes, and nothing has been through a final hold-out. The published literature finds HAR-type models hard to beat on real data, and that matches my expectation.
 
-## The honest outcome
+## Leakage and bias audit
 
-The direct "predict next-day volatility direction" model, after full leak-free validation,
-**did not show a reliable edge** — despite promising single-feature signals and earlier backtests
-that looked strong before the bias was removed. That finding was reported plainly rather than
-reframed to look better.
+The original starter code and exploration notebook had these issues. All are fixed here, and the details are in [docs/methodology.md](docs/methodology.md).
 
-The validated, shippable result was different in kind: not a price predictor, but a **statistically
-significant risk-timing overlay** — using the same features to flag regime shifts and scale
-exposure down ahead of them. That version cleared every validation gate (significant under
-permutation testing, positive bootstrap confidence interval, stable across sub-periods) and was
-productionized with automated daily scoring, data-freshness checks, and fail-safe alerting.
+| Issue | Effect | Fix |
+|---|---|---|
+| One date split, with the last training row's target being the first test day's variance (h days of overlap at horizon h) | Training labels from inside the test period | Purge of `h` rows before every test block; tested for h = 1, 5 and 22 |
+| The naive baseline was scored on target days shifted by one day from the HAR target | The "HAR beats naive by about 22%" comparison was not like-for-like | One target and one index shared by every model |
+| A single train/test split, with GARCH and HAR parameters estimated once | The conclusion rested on one test window | Rolling-origin refits every 63 days, 32 folds |
+| RMSE on annualised squared daily returns | A noisy proxy, with the score dominated by a few spikes | QLIKE and MSE (robust to proxy noise, Patton 2011), a Diebold-Mariano test, and a better `rv` (intraday, or Garman-Klass) |
+| HAR in levels can forecast a negative variance | Undefined QLIKE, and nonsense forecasts in calm periods | Floored at half the smallest training target |
+| Ensemble weights, the regime threshold and the EWMA lambda could be picked on the test period | Selection bias | Weights from earlier folds only, the threshold from the training quantile, and lambda fixed at 0.94 |
+| The regime probability fed into the second stage was in-sample | The second stage would trust an over-fitted probability | Cross-fitted on training blocks with an `h`-row purge |
+| Results reported only at one horizon | Picking the horizon that looks best | Every run reports 1, 5 and 22 days |
 
-## What this demonstrates
+## Repo layout
 
-- Feature engineering that measurably moved a model's signal (not just hyperparameter tuning)
-- Comfort with an ensemble of model families (linear, boosted trees, multiple architectures) and
-  disciplined ablation to decide what actually belongs in it
-- A validation methodology (walk-forward, purging, permutation tests, bootstrap CI, multiple-testing
-  correction) rigorous enough to catch two real bugs before they reached a client
-- The judgement to report a negative result honestly, and to reframe a failed hypothesis into a
-  different, validated, shippable product rather than force the original idea to work
+```
+src/volregime/   data.py · features.py · models.py · walkforward.py · metrics.py
+scripts/         run_forecasts.py
+tests/           causality per model, truncation, purge, GARCH recovery, noise test
+docs/            methodology.md
+```
 
----
+## Quick start
 
-*Companion project: [AI Engineering from Scratch](https://github.com/Avinash186200/ai-engineering-from-scratch) —
-a public course on building production LLM/agent systems.*
+```bash
+pip install -r requirements.txt
+pytest -q
+python scripts/run_forecasts.py                          # synthetic, about 20 s
+python scripts/run_forecasts.py --horizons 1 5 --expanding
+pip install yfinance && python scripts/run_forecasts.py --ticker SPY   # public data, not committed
+python scripts/run_forecasts.py --csv your_daily_ohlc.csv
+```
+
+## License
+
+MIT
