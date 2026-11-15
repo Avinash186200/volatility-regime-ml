@@ -1,0 +1,1 @@
+HAR-RV baseline: RMSE 0.1074 on 666 test points (test period starting 2024-01-01), vs. 0.1387 for a naive persistence baseline. HAR-RV outperforms naive by ~22%.

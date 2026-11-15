@@ -1,10 +1,10 @@
 # Volatility Regime ML
 
+[![CI](https://github.com/Avinash186200/volatility-regime-ml/actions/workflows/ci.yml/badge.svg)](https://github.com/Avinash186200/volatility-regime-ml/actions/workflows/ci.yml) ![Python](https://img.shields.io/badge/python-3.11-blue) [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 Several genuinely different volatility forecasters, one shared leak-free evaluation, and an honest answer to two questions: why do they disagree, and does combining them help?
 
 This is a research project I designed and mentored. I wrote the brief and the starter code, and set the ground rules: same data, same splits and same loss for every model, nothing tuned on the test set, and "it doesn't beat HAR-RV" counts as a real result. This repo is my own working implementation of that brief. It runs on a **synthetic regime-switching market** by default, and can download free public daily data at runtime. No data is committed.
-
-[![CI](../../actions/workflows/ci.yml/badge.svg)](../../actions/workflows/ci.yml)
 
 ## At a glance
 
@@ -104,6 +104,16 @@ pip install yfinance && python scripts/run_forecasts.py --ticker SPY   # public 
 python scripts/run_forecasts.py --csv your_daily_ohlc.csv
 ```
 
+## Original research code
+
+[`original/`](original/README.md) holds the original project code: the brief and starter code I wrote, plus the
+first exploration notebook from the project. It is sanitised and nothing else:
+client, company and person names replaced, credentials and local paths removed, data files and notebook outputs
+dropped. It is kept so the real work can be read alongside the maintained version. Some of it contains the issues
+described above; comparing the two shows each fix.
+
 ## License
 
 MIT
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) and the [CHANGELOG](CHANGELOG.md).
