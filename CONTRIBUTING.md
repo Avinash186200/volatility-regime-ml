@@ -17,8 +17,8 @@ python -m pytest -q
 ## How the repository is organised
 
 - The maintained code is described in the [README](README.md); method notes are in [`docs/`](docs/README.md).
-- [`original/`](original/README.md) is the sanitised original code. Treat it as a read-only record.
-- Tests must stay fast and offline: no network, no API keys, no private data.
+- [`original/`](original/README.md) is the original research code. Treat it as a read-only record.
+- Tests must stay fast and offline: no network, no API keys, no local data files.
 
 ## Changes
 

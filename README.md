@@ -130,7 +130,7 @@ src/volregime/   data.py (synthetic market, CSV, download) · features.py · mod
 scripts/         run_forecasts.py (the CLI that prints the tables above)
 tests/           test_volregime.py: causality per model, truncation, purge, GARCH recovery, noise test
 docs/            README.md (index) · methodology.md (method and bias audit)
-original/        the sanitised original brief, starter code and notebook (read-only)
+original/        the original brief, starter code and notebook (read-only)
 results/         created by the script, git-ignored
 .github/         CI workflow
 ```
@@ -151,10 +151,8 @@ python scripts/run_forecasts.py --csv your_daily_ohlc.csv
 ## Original research code
 
 [`original/`](original/README.md) holds the original project code: the brief and starter code I wrote, plus the
-first exploration notebook from the project. It is sanitised and nothing else:
-client, company and person names replaced, credentials and local paths removed, data files and notebook outputs
-dropped. It is kept so the real work can be read alongside the maintained version. Some of it contains the issues
-described above; comparing the two shows each fix.
+first exploration notebook from the project. It is kept so you can read the first version alongside the
+maintained one; some of it contains the issues in the audit table above, and comparing the two shows each fix.
 
 ## License
 
