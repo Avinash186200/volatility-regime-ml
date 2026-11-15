@@ -6,6 +6,37 @@ Several genuinely different volatility forecasters, one shared leak-free evaluat
 
 This is a research project I designed and mentored. I wrote the brief and the starter code, and set the ground rules: same data, same splits and same loss for every model, nothing tuned on the test set, and "it doesn't beat HAR-RV" counts as a real result. This repo is my own working implementation of that brief. It runs on a **synthetic regime-switching market** by default, and can download free public daily data at runtime. No data is committed.
 
+## What problem this solves
+
+Risk sizing, option pricing and vol-targeted portfolios all need a forecast of how much prices will move. There are many ways to make that forecast, and it is easy to compare them unfairly, for example by tuning on the test period or letting training labels overlap the test window. This repo puts several forecasters through one leak-free test, so the comparison means something, and then asks why they disagree and whether combining them helps.
+
+## What you will learn
+
+- What realised variance is, and why it is a better target than a squared daily return.
+- How EWMA, GARCH(1,1) and HAR-RV forecast volatility, and why they see different information.
+- How to set up a rolling walk-forward test with a purge, so overlapping multi-day targets do not leak.
+- How to score variance forecasts with QLIKE and MSE, and test a difference with Diebold-Mariano.
+- How to use an ablation to find out where a model's gain really comes from.
+- How to build an ensemble whose weights use past data only.
+- How to write tests that catch look-ahead: perturb the future and check nothing changes, cut the data and check nothing changes.
+
+## Key concepts
+
+- **Volatility / variance:** how much returns spread out. Variance is volatility squared. Here it is annualised (x252).
+- **Realised variance (RV):** the sum of squared intraday returns for one day. A much less noisy measure of that day's variance than one squared daily return.
+- **Garman-Klass estimator:** a variance estimate from one day's open, high, low and close. Used when only daily data is available.
+- **EWMA:** an exponentially weighted moving average of past RV. Recent days count more.
+- **GARCH(1,1):** a model where today's variance depends on yesterday's squared return and yesterday's variance. Fitted by maximum likelihood.
+- **HAR-RV:** a linear regression of future RV on the last day's, week's and month's average RV. Simple, and hard to beat.
+- **Ablation:** remove one ingredient from a model and see if the result changes. It shows which part does the work.
+- **Look-ahead bias:** a forecast that uses data that would not have been known at the time. It makes results look better than they can be.
+- **Walk-forward (rolling origin):** train on a past window, test on the next block, move forward, repeat. Every test block is truly out of sample.
+- **Purge:** drop training rows whose target window reaches into the test block. Needed when the target is an h-day average.
+- **QLIKE:** a loss for variance forecasts, `y/f - log(y/f) - 1`. It punishes under-forecasting more and is not dominated by a few spikes.
+- **Diebold-Mariano (DM) test:** checks whether one model's average loss is really lower than another's, allowing for autocorrelated losses.
+- **AUC and Brier score:** AUC measures how well a classifier ranks high-regime days above low ones (0.5 is chance, 1.0 is perfect). Brier is the mean squared error of the predicted probability.
+- **Ensemble:** an average of several models' forecasts.
+
 ## At a glance
 
 | | |
@@ -18,10 +49,16 @@ This is a research project I designed and mentored. I wrote the brief and the st
 
 ## How it works
 
+```mermaid
+flowchart LR
+    A[data.py<br/>synthetic, CSV or download] --> B[features.py<br/>causal HAR terms, EWMA, returns]
+    B --> C[walkforward.py<br/>rolling window, refit every 63 days, purge h]
+    C --> D[models.py<br/>8 forecasters, same fit/predict]
+    D --> E[metrics.py<br/>QLIKE, MSE, DM test, AUC, Brier]
+    E --> F[results/<br/>forecasts and leaderboards]
 ```
-data ──► causal features ──► rolling walk-forward (refit every 63 days, purge h) ──► forecasts ──► QLIKE / MSE / DM
-data.py   features.py         walkforward.py + models.py                                          metrics.py
-```
+
+In plain text: data -> causal features -> rolling walk-forward (refit every 63 days, purge h) -> forecasts -> QLIKE / MSE / DM.
 
 1. **Data.** The synthetic market has a calm (12% vol) and a stress (35% vol) regime, a leverage effect and rare jumps. Each day is built from 78 intraday returns, so `rv` is a real realised variance. For public data, `rv` is the Garman-Klass range estimator from daily OHLC.
 2. **Features at the close of day t**, using days up to t only: daily, weekly and monthly realised variance (the HAR components), an EWMA, the day's negative return, and their logs.
@@ -43,6 +80,8 @@ data.py   features.py         walkforward.py + models.py                        
 
 ## Results on synthetic data
 
+Every number in this section comes from the synthetic market generator, not from a real market.
+
 `python scripts/run_forecasts.py` (seed 7, 3,000 days, 32 folds, about 1,960 out-of-sample forecasts per horizon). QLIKE relative to HAR, so below 1.00 is better than HAR:
 
 | Model | h = 1 | h = 5 | h = 22 |
@@ -56,7 +95,7 @@ data.py   features.py         walkforward.py + models.py                        
 | Equal-weight ensemble | 1.17 | 1.09 | 0.90 |
 | Inverse-loss ensemble | 1.04 | 0.97 | 0.88 |
 
-The full output, with MSE ratios and Diebold-Mariano statistics, is printed by the script and written to `results/`.
+The full output, with MSE ratios and Diebold-Mariano statistics, is printed by the script and written to `results/` (git-ignored) as `forecasts_h<h>.csv` and `leaderboard_h<h>.csv`.
 
 What I take from this:
 
@@ -87,10 +126,13 @@ The original starter code and exploration notebook had these issues. All are fix
 ## Repo layout
 
 ```
-src/volregime/   data.py · features.py · models.py · walkforward.py · metrics.py
-scripts/         run_forecasts.py
-tests/           causality per model, truncation, purge, GARCH recovery, noise test
-docs/            methodology.md
+src/volregime/   data.py (synthetic market, CSV, download) · features.py · models.py · walkforward.py · metrics.py
+scripts/         run_forecasts.py (the CLI that prints the tables above)
+tests/           test_volregime.py: causality per model, truncation, purge, GARCH recovery, noise test
+docs/            README.md (index) · methodology.md (method and bias audit)
+original/        the sanitised original brief, starter code and notebook (read-only)
+results/         created by the script, git-ignored
+.github/         CI workflow
 ```
 
 ## Quick start
@@ -103,6 +145,8 @@ python scripts/run_forecasts.py --horizons 1 5 --expanding
 pip install yfinance && python scripts/run_forecasts.py --ticker SPY   # public data, not committed
 python scripts/run_forecasts.py --csv your_daily_ohlc.csv
 ```
+
+`your_daily_ohlc.csv` is your own file and is not shipped. It needs a `date` column plus either `open, high, low, close` or `close, rv`. The `--ticker` run needs network access and prints real-data numbers to your screen only; I do not publish them here (see the note above). `python scripts/run_forecasts.py --help` lists every option.
 
 ## Original research code
 
