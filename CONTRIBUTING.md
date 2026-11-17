@@ -1,7 +1,7 @@
 # Contributing
 
 Thanks for taking a look. This is one of my portfolio repositories: it documents a piece of research or engineering
-work I did, rebuilt so anyone can run it on synthetic or public data.
+work I did. It runs on synthetic or public data, so anyone can run it.
 
 ## Getting started
 
